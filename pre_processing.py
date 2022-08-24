@@ -59,12 +59,6 @@ def pre_processing(file = None):
     derived_features = ['months_since_last_payment','months_since_last_credit_pull',
                         'months_since_earliest_cr_line',
                         'emp_length','late_fees_applied']
-
-    # Clipping the values to 95% Quantile
-    for column in num_features:
-        upp = dataset[column].quantile(0.975)
-        low = dataset[column].quantile(0.025)
-        dataset[column] = dataset[column].clip(upper = upp, lower = low)
     
     categorical_dummies =  pd.get_dummies(dataset[categorical_elements], drop_first=True)
     
@@ -109,34 +103,84 @@ def pre_processing(file = None):
     return dataset[all_features+['default_ind']], all_features
 
 
-def data_split(dataset, all_features, random_split = False ,undersample = False, oversample = False):
+def data_split(dataset, 
+               all_features, 
+               problem = 'classification',
+               random_split = False, 
+               undersample = False, 
+               oversample = False):
 
     if undersample & oversample:
         return print('please pick only one - over or under sample method')
     
-    if random_split == True:
-        X=dataset.drop('issue_d',axis=1)
-        y=dataset[['default_ind']]
-        X_train, X_test, y_train, y_test = train_test_split(X, y, train_size=0.7, stratify = y)
-    else:
-        X=dataset[all_features]
-        y=dataset[['default_ind','issue_d']]
+    if problem == 'classification':   
+        if random_split == True:
+            X=dataset.drop('issue_d',axis=1)
+            y=dataset[['default_ind']]
+            X_train, X_test, y_train, y_test = train_test_split(X, y, train_size=0.7, stratify = y)
+        else:
+            X=dataset[all_features]
+            y=dataset[['default_ind','issue_d']]
 
-        X_train=X[X['issue_d']<='2015-05-31'].drop('issue_d',axis=1)
-        X_test=X[X['issue_d']>'2015-05-31'].drop('issue_d',axis=1)
+            X_train=X[X['issue_d']<='2015-05-31'].drop('issue_d',axis=1)
+            X_test=X[X['issue_d']>'2015-05-31'].drop('issue_d',axis=1)
 
-        y_train=y[y['issue_d']<='2015-05-31'].drop('issue_d',axis=1)
-        y_test=y[y['issue_d']>'2015-05-31'].drop('issue_d',axis=1)
-    
-    if undersample == True:
-        undersampler = RandomUnderSampler(sampling_strategy='majority')
-        X_train,y_train = undersampler.fit_resample(X_train, y_train)
+            y_train=y[y['issue_d']<='2015-05-31'].drop('issue_d',axis=1)
+            y_test=y[y['issue_d']>'2015-05-31'].drop('issue_d',axis=1)
+
+        if undersample == True:
+            undersampler = RandomUnderSampler(sampling_strategy='majority')
+            X_train,y_train = undersampler.fit_resample(X_train, y_train)
+
+        if oversample == True:
+            oversampler = SMOTE()
+            undersampler = RandomUnderSampler(sampling_strategy=0.461556)
+            X_train,y_train = undersampler.fit_resample(X_train, y_train)
+            X_train,y_train = oversampler.fit_resample(X_train, y_train)
+
         
-    if oversample == True:
-        oversampler = SMOTE()
-        undersampler = RandomUnderSampler(sampling_strategy=0.461556)
-        X_train,y_train = undersampler.fit_resample(X_train, y_train)
-        X_train,y_train = oversampler.fit_resample(X_train, y_train)
+    elif problem == 'regression' or 'regression-review':
+        dataset = dataset[dataset['purpose_debt_consolidation']==1]
+        dataset2 = dataset[dataset['default_ind']==0]
+        X=dataset2.drop(['issue_d','months_since_last_payment','default_ind','int_rate',
+                        'purpose_credit_card', 'purpose_debt_consolidation',
+                            'purpose_educational', 'purpose_home_improvement', 'purpose_house',
+                            'purpose_major_purchase', 'purpose_medical', 'purpose_moving',
+                            'purpose_other', 'purpose_renewable_energy', 'purpose_small_business',
+                            'purpose_vacation', 'purpose_wedding'],axis=1)
+        y=dataset2[['int_rate']]
+        X_train, X_test, y_train, y_test = train_test_split(X, y, train_size=0.75)
 
+    if problem == 'regression-review':
+        dataset = dataset[dataset['default_ind']==1]
+        X_test=dataset.drop(['issue_d','months_since_last_payment','default_ind','int_rate',
+                        'purpose_credit_card', 'purpose_debt_consolidation',
+                            'purpose_educational', 'purpose_home_improvement', 'purpose_house',
+                            'purpose_major_purchase', 'purpose_medical', 'purpose_moving',
+                            'purpose_other', 'purpose_renewable_energy', 'purpose_small_business',
+                            'purpose_vacation', 'purpose_wedding'],axis=1)
+        y_test=dataset[['int_rate']]
+        
+    num_features = ['loan_amnt', 'funded_amnt', 'funded_amnt_inv', 'int_rate',
+                    'installment', 'annual_inc', 'dti', 'delinq_2yrs', 'inq_last_6mths',
+                    'mths_since_last_delinq', 'open_acc', 'pub_rec', 'revol_bal',
+                    'revol_util', 'total_acc', 'out_prncp', 'out_prncp_inv', 'total_pymnt',
+                    'total_pymnt_inv', 'total_rec_prncp', 'total_rec_int', 'last_pymnt_amnt', 'tot_coll_amt',
+                    'tot_cur_bal', 'total_rev_hi_lim']
+
+    # Clipping the values to 95% Quantile independently of the test data
+    X_train, X_test = clip_values(X_train, X_test, num_features) 
+        
     return X_train, X_test, np.ravel(y_train), np.ravel(y_test)
 
+
+
+# Clipping the values to 95% Quantile independently of the test data
+def clip_values(X_train, X_test, features, upper_quantile=0.025, lower_quantile=0.975):
+    features = set(X_train.columns).intersection(features)
+    for column in features:
+        upp = X_train[column].quantile(upper_quantile)
+        low = X_train[column].quantile(lower_quantile)
+        X_train[column] = X_train[column].clip(upper = upp, lower = low)
+        X_test[column] = X_test[column].clip(upper = upp, lower = low)
+    return X_train, X_test
